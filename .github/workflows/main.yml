@@ -1,0 +1,98 @@
+name: Compress URLs and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Download URLs (one per line)"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y zstd coreutils aria2
+
+      - name: Process URLs
+        run: |
+          mkdir downloads
+          mkdir output
+
+          echo "${{ github.event.inputs.urls }}" > urls.txt
+
+          while IFS= read -r URL
+          do
+            [ -z "$URL" ] && continue
+
+            echo "==============================="
+            echo "Processing $URL"
+            echo "==============================="
+
+            FILE_NAME=$(basename "$URL")
+
+            echo "Downloading $FILE_NAME"
+
+            aria2c \
+              --continue=true \
+              --max-connection-per-server=16 \
+              --split=16 \
+              --min-split-size=10M \
+              --file-allocation=none \
+              -d downloads \
+              -o "$FILE_NAME" \
+              "$URL"
+
+            echo "Compressing $FILE_NAME"
+
+            zstd -T0 -19 -f "downloads/$FILE_NAME" -o "output/$FILE_NAME.zst"
+
+            echo "Deleting original file to free space"
+            rm -f "downloads/$FILE_NAME"
+
+            echo "Generating checksum for compressed file"
+
+            sha256sum "output/$FILE_NAME.zst" > "output/$FILE_NAME.zst.sha256"
+            md5sum "output/$FILE_NAME.zst" > "output/$FILE_NAME.zst.md5"
+
+            echo "Splitting compressed file"
+
+            split \
+              -b 1900M \
+              -d \
+              -a 2 \
+              --numeric-suffixes=1 \
+              --additional-suffix=.zst \
+              "output/$FILE_NAME.zst" \
+              "output/$FILE_NAME.part"
+
+            echo "Generating checksum for parts"
+
+            sha256sum output/$FILE_NAME.part*.zst > output/$FILE_NAME.parts.sha256
+            md5sum output/$FILE_NAME.part*.zst > output/$FILE_NAME.parts.md5
+
+          done < urls.txt
+
+          ls -lh output
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-${{ github.run_id }}
+          name: Compressed Files ${{ github.run_id }}
+          files: |
+            output/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print Release URL
+        run: |
+          echo "Release ready:"
+          echo "https://github.com/${{ github.repository }}/releases/tag/release-${{ github.run_id }}"
