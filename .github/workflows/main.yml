@@ -78,6 +78,9 @@ jobs:
             sha256sum output/$FILE_NAME.part*.zst > output/$FILE_NAME.parts.sha256
             md5sum output/$FILE_NAME.part*.zst > output/$FILE_NAME.parts.md5
 
+            echo "Deleting original .zst file to avoid size errors"
+            rm -f "output/$FILE_NAME.zst"
+
           done < urls.txt
 
           ls -lh output
